@@ -1,0 +1,35 @@
+{
+  "name": "swiggy-agent-mcp",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "homepage": "https://github.com/Lateef9/swiggy-agent-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Lateef9/swiggy-agent-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lateef9/swiggy-agent-mcp.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.5",
+    "@inquirer/prompts": "^8.5.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^7.0.11",
+    "csv-parser": "^3.2.1",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.22.5",
+    "typescript": "^6.0.3"
+  }
+}
