@@ -1,3 +1,8 @@
+// Swiggy MCP beta rejects place_food_order when the cart is ₹1000 or more.
+export const SWIGGY_MCP_MAX_CART_TOTAL = 999;
+// Reserve room for delivery fees and taxes when choosing menu items.
+export const SWIGGY_MCP_CART_FEE_BUFFER = 150;
+
 export interface TeamMember {
   name: string;
   dietaryRestrictions: string[]; // e.g. ["vegetarian", "no-peanuts"]
@@ -31,6 +36,8 @@ export interface OrderSummary {
   restaurantName: string;
   restaurantId: string;
   addressId: string;
+  deliveryAddress: string;
+  availablePaymentMethods: string[];
   items: CartItem[];
   subtotal: number;
   couponCode?: string;

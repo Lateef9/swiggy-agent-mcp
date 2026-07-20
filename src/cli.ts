@@ -22,7 +22,8 @@ import chalk from "chalk";
 import ora from "ora";
 import inquirer from "inquirer";
 import { loadPartyConfig, splitIntoGroups } from "./parser.js";
-import { buildCartForGroup, placeOrder } from "./agent.js";
+import { SwiggyAgentSession } from "./agent.js";
+import { SWIGGY_MCP_MAX_CART_TOTAL } from "./types.js";
 import type { OrderSummary } from "./types.js";
 
 // ── CLI argument parsing (no external dep needed) ──────────────────────────
@@ -46,13 +47,29 @@ function parseArgs(): {
   const budgetRaw = get("--budget");
   const budget = budgetRaw ? parseInt(budgetRaw, 10) : 250;
   const capRaw = get("--cap");
-  const cap = capRaw ? parseInt(capRaw, 10) : 5000;
+  const cap = capRaw
+    ? parseInt(capRaw, 10)
+    : SWIGGY_MCP_MAX_CART_TOTAL;
 
   if (!csv) {
     console.error(chalk.red("Error: --csv <path> is required"));
     console.error(
       chalk.dim(
-        "Usage: npx party-agent --csv responses.csv --event \"v2.0 Launch\" --address \"Office\" --budget 250 --cap 5000"
+        `Usage: npx party-agent --csv responses.csv --event "v2.0 Launch" --address "Office" --budget 250 --cap ${SWIGGY_MCP_MAX_CART_TOTAL}`
+      )
+    );
+    process.exit(1);
+  }
+
+  if (!Number.isFinite(budget) || budget <= 0) {
+    console.error(chalk.red("Error: --budget must be a positive number"));
+    process.exit(1);
+  }
+
+  if (!Number.isFinite(cap) || cap <= 0 || cap > SWIGGY_MCP_MAX_CART_TOTAL) {
+    console.error(
+      chalk.red(
+        `Error: --cap must be between 1 and ${SWIGGY_MCP_MAX_CART_TOTAL}. Swiggy MCP rejects carts of ₹1000 or more.`
       )
     );
     process.exit(1);
@@ -109,6 +126,14 @@ function printOrderSummary(summary: OrderSummary, cap: number) {
 
   const totalColor = summary.total > cap ? chalk.red : chalk.bold.green;
   console.log(`  Total   : ${totalColor(`₹${summary.total}`)}`);
+  console.log(`  Deliver : ${chalk.white(summary.deliveryAddress)}`);
+  console.log(
+    `  Payment : ${
+      summary.availablePaymentMethods.length > 0
+        ? chalk.white(summary.availablePaymentMethods.join(", "))
+        : chalk.yellow("Swiggy will select an available method")
+    }`
+  );
 
   if (summary.total > cap) {
     console.log(
@@ -125,7 +150,7 @@ async function confirmOrder(summary: OrderSummary): Promise<boolean> {
       type: "confirm",
       name: "confirm",
       message: chalk.bold(
-        `Place order ${summary.groupIndex + 1}/${summary.totalGroups} from ${summary.restaurantName} (₹${summary.total})?`
+        `Place order ${summary.groupIndex + 1}/${summary.totalGroups} from ${summary.restaurantName} for ₹${summary.total} to ${summary.deliveryAddress}?`
       ),
       default: false,
     },
@@ -161,59 +186,75 @@ async function main() {
 
   const placedOrders: { groupIndex: number; orderId: string; restaurant: string }[] = [];
   const skippedGroups: number[] = [];
+  const session = await SwiggyAgentSession.connect();
 
-  // 2. Process each group sequentially
-  for (let i = 0; i < groups.length; i++) {
-    const group = groups[i];
-    const spinner = ora(
-      `Building cart for group ${i + 1}/${groups.length} (${group.map((m) => m.name).join(", ")})...`
-    ).start();
+  try {
+    // 2. Process every group in the same authenticated MCP session.
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i]!;
+      const spinner = ora(
+        `Building cart for group ${i + 1}/${groups.length} (${group.map((m) => m.name).join(", ")})...`
+      ).start();
 
-    let summary: OrderSummary;
-    try {
-      summary = await buildCartForGroup(
-        group,
-        config.deliveryAddressLabel,
-        config.maxBudgetPerPerson,
-        i,
-        groups.length,
-        cap
-      );
-      spinner.succeed(
-        `Cart ready: ${summary.restaurantName} — ₹${summary.total}`
-      );
-    } catch (err: any) {
-      spinner.fail(`Failed to build cart for group ${i + 1}: ${err.message}`);
-      skippedGroups.push(i + 1);
-      continue;
+      let summary: OrderSummary;
+      try {
+        summary = await session.buildCartForGroup(
+          group,
+          config.deliveryAddressLabel,
+          config.maxBudgetPerPerson,
+          i,
+          groups.length,
+          cap
+        );
+        spinner.succeed(
+          `Cart ready: ${summary.restaurantName} — ₹${summary.total}`
+        );
+      } catch (err: any) {
+        spinner.fail(`Failed to build cart for group ${i + 1}: ${err.message}`);
+        skippedGroups.push(i + 1);
+        continue;
+      }
+
+      // 3. Show summary and ask for confirmation
+      printOrderSummary(summary, cap);
+
+      if (summary.total > cap || summary.total >= 1000) {
+        console.log(
+          chalk.red(
+            `  Cannot place this order: ₹${summary.total} exceeds the ₹${cap} group cap.`
+          )
+        );
+        skippedGroups.push(i + 1);
+        continue;
+      }
+
+      const confirmed = await confirmOrder(summary);
+
+      if (!confirmed) {
+        console.log(chalk.dim(`  Skipped order ${i + 1}.`));
+        skippedGroups.push(i + 1);
+        continue;
+      }
+
+      // 4. Place through the same client that built and verified the cart.
+      const placeSpinner = ora(`Placing order ${i + 1}...`).start();
+      try {
+        const orderId = await session.placeOrder(summary, cap);
+        placeSpinner.succeed(
+          `Order placed! ID: ${chalk.bold.green(orderId)}`
+        );
+        placedOrders.push({
+          groupIndex: i + 1,
+          orderId,
+          restaurant: summary.restaurantName,
+        });
+      } catch (err: any) {
+        placeSpinner.fail(`Failed to place order ${i + 1}: ${err.message}`);
+        skippedGroups.push(i + 1);
+      }
     }
-
-    // 3. Show summary and ask for confirmation
-    printOrderSummary(summary, cap);
-    const confirmed = await confirmOrder(summary);
-
-    if (!confirmed) {
-      console.log(chalk.dim(`  Skipped order ${i + 1}.`));
-      skippedGroups.push(i + 1);
-      continue;
-    }
-
-    // 4. Place the order
-    const placeSpinner = ora(`Placing order ${i + 1}...`).start();
-    try {
-      const orderId = await placeOrder(summary, cap);
-      placeSpinner.succeed(
-        `Order placed! ID: ${chalk.bold.green(orderId)}`
-      );
-      placedOrders.push({
-        groupIndex: i + 1,
-        orderId,
-        restaurant: summary.restaurantName,
-      });
-    } catch (err: any) {
-      placeSpinner.fail(`Failed to place order ${i + 1}: ${err.message}`);
-      skippedGroups.push(i + 1);
-    }
+  } finally {
+    await session.close();
   }
 
   // 5. Final summary

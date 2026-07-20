@@ -10,7 +10,7 @@ async function main() {
   
   try {
     const { text } = await generateText({
-      model: anthropic(process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'),
+      model: anthropic('claude-haiku-4-5-20251001'),
       prompt: 'hii',
     });
     

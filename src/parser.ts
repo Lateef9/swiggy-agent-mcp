@@ -1,5 +1,9 @@
 import { parse } from "csv-parse/sync";
 import { readFileSync } from "fs";
+import {
+  SWIGGY_MCP_CART_FEE_BUFFER,
+  SWIGGY_MCP_MAX_CART_TOTAL,
+} from "./types.js";
 import type { TeamMember, PartyConfig } from "./types.js";
 
 // Normalise a free-text dietary restriction to a canonical tag
@@ -108,13 +112,29 @@ export function buildGroupSummary(members: TeamMember[]): string {
 }
 
 // Split members into groups that fit within the cart cap.
-// cartCap defaults to 5000; pass a lower value if your Swiggy plan enforces one.
+// Swiggy MCP beta requires every order total to remain below ₹1000.
 export function splitIntoGroups(
   members: TeamMember[],
   maxBudgetPerPerson: number,
-  cartCap: number = 5000
+  cartCap: number = SWIGGY_MCP_MAX_CART_TOTAL
 ): TeamMember[][] {
-  const membersPerGroup = Math.max(1, Math.floor(cartCap / maxBudgetPerPerson));
+  if (!Number.isFinite(maxBudgetPerPerson) || maxBudgetPerPerson <= 0) {
+    throw new Error("Budget per person must be a positive number.");
+  }
+  if (cartCap > SWIGGY_MCP_MAX_CART_TOTAL) {
+    throw new Error(
+      `Cart cap cannot exceed ₹${SWIGGY_MCP_MAX_CART_TOTAL} for Swiggy MCP beta orders.`
+    );
+  }
+
+  const itemSubtotalCap = Math.max(
+    1,
+    cartCap - SWIGGY_MCP_CART_FEE_BUFFER
+  );
+  const membersPerGroup = Math.max(
+    1,
+    Math.floor(itemSubtotalCap / maxBudgetPerPerson)
+  );
   const groups: TeamMember[][] = [];
 
   for (let i = 0; i < members.length; i += membersPerGroup) {
